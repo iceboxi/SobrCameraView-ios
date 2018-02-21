@@ -185,7 +185,7 @@ open class SobrCameraView: UIView, AVCaptureVideoDataOutputSampleBufferDelegate 
     :param: point      The point to focus.
     :param: completion The completion handler will be called everytime. Even if the camera does not support focus.
     */
-    open func focusAt(_ point: CGPoint, completion:((Void)-> Void)?) {
+    open func focusAt(_ point: CGPoint, completion:(()-> Void)?) {
         if let device = self.captureDevice {
             let poi = CGPoint(x: point.y / self.bounds.height, y: 1.0 - (point.x / self.bounds.width))
             if device.isFocusPointOfInterestSupported && device.isFocusModeSupported(.autoFocus) {
