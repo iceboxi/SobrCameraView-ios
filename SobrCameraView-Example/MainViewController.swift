@@ -27,7 +27,7 @@ class MainViewController: UIViewController {
     }
     
     
-    func updateIfBorderIsDetected() {
+    @objc func updateIfBorderIsDetected() {
         
         if self.cameraView.isBorderDetected {
             
