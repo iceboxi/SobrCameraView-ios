@@ -70,6 +70,9 @@ class MainViewController: UIViewController {
     @IBAction func toggleTorch(_ sender: AnyObject?) {
         self.cameraView.torchEnabled = !self.cameraView.torchEnabled
     }
-
+    
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        self.cameraView.willRotate()
+    }
 }
 

@@ -82,7 +82,24 @@ open class SobrCameraView: UIView, AVCaptureVideoDataOutputSampleBufferDelegate 
     fileprivate var captureSession = AVCaptureSession()
     fileprivate var captureDevice: AVCaptureDevice?
     fileprivate var context: EAGLContext?
-    fileprivate var stillImageOutput: AVCaptureStillImageOutput = AVCaptureStillImageOutput()
+    fileprivate lazy var stillImageOutput: AVCaptureStillImageOutput = {
+        var output = AVCaptureStillImageOutput()
+        output.outputSettings = [
+//            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+                                 AVVideoCodecKey: AVVideoCodecJPEG
+        ]
+        output.connection(with: AVMediaType.video)
+        return output
+    }()
+    fileprivate lazy var videoDataOutput: AVCaptureVideoDataOutput = {
+        var output = AVCaptureVideoDataOutput()
+//        output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange]
+        output.alwaysDiscardsLateVideoFrames = true
+        output.setSampleBufferDelegate(self, queue: self.videoDataOutputQueue)
+        output.connection(with: AVMediaType.video)
+        return output
+    }()
+    fileprivate var videoDataOutputQueue = DispatchQueue(label: "VideoDataOutputQueue")
     fileprivate var forceStop: Bool = false
     fileprivate var coreImageContext: CIContext?
     fileprivate var renderBuffer: GLuint = 0
@@ -134,17 +151,15 @@ open class SobrCameraView: UIView, AVCaptureVideoDataOutputSampleBufferDelegate 
         self.captureSession.sessionPreset = AVCaptureSession.Preset.photo
         self.captureSession.addInput(input)
         
-        let dataOutput = AVCaptureVideoDataOutput()
-        dataOutput.alwaysDiscardsLateVideoFrames = true
-//        dataOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA]
-        dataOutput.setSampleBufferDelegate(self, queue: DispatchQueue.main)
-        self.captureSession.addOutput(dataOutput)
-        
-        self.captureSession.addOutput(self.stillImageOutput)
-        
-        if  let connection = dataOutput.connections.first {
-            connection.videoOrientation = .portrait
+        if captureSession.canAddOutput(videoDataOutput) {
+            captureSession.addOutput(videoDataOutput)
         }
+        
+        if captureSession.canAddOutput(stillImageOutput) {
+            captureSession.addOutput(stillImageOutput)
+        }
+        
+        willRotate()
         
         if self.captureDevice!.isFlashAvailable {
             try! self.captureDevice?.lockForConfiguration()
@@ -156,6 +171,12 @@ open class SobrCameraView: UIView, AVCaptureVideoDataOutputSampleBufferDelegate 
             try! self.captureDevice?.lockForConfiguration()
             self.captureDevice?.focusMode = .continuousAutoFocus
             self.captureDevice?.unlockForConfiguration()
+        }
+    }
+    
+    open func willRotate() {
+        if let connection = videoDataOutput.connections.first {
+            connection.videoOrientation = AVCaptureVideoOrientation(rawValue: UIDevice.current.orientation.rawValue) ?? .portrait
         }
     }
     
@@ -240,31 +261,33 @@ open class SobrCameraView: UIView, AVCaptureVideoDataOutputSampleBufferDelegate 
         }
         
         self.stillImageOutput.captureStillImageAsynchronously(from: videoConnection!, completionHandler: { (imageSampleBuffer, error) -> Void in
-            let jpg = AVCaptureStillImageOutput.jpegStillImageNSDataRepresentation(imageSampleBuffer!)
-            
-            var enhancedImage: CIImage = CIImage(data: jpg!)!
-            switch self.imageFilter {
-            case .blackAndWhite:
-                enhancedImage = self.contrastFilter(enhancedImage)
-            default:
-                enhancedImage = self.enhanceFilter(enhancedImage)
-            }
-            
-            if self.borderDetectionEnabled && self.detectionConfidenceValid() {
-                if let rectangleFeature = self.biggestRectangle(SobrCameraView.highAccuracyRectangleDetector?.features(in: enhancedImage) as! [CIRectangleFeature]) {
-                    rectangleFeature
-                    enhancedImage = self.perspectiveCorrectedImage(enhancedImage, feature: rectangleFeature)
+            if let imageSampleBuffer = imageSampleBuffer {
+                let jpg = AVCaptureStillImageOutput.jpegStillImageNSDataRepresentation(imageSampleBuffer)
+                
+                var enhancedImage: CIImage = CIImage(data: jpg!)!
+                switch self.imageFilter {
+                case .blackAndWhite:
+                    enhancedImage = self.contrastFilter(enhancedImage)
+                default:
+                    enhancedImage = self.enhanceFilter(enhancedImage)
                 }
+                
+                if self.borderDetectionEnabled && self.detectionConfidenceValid() {
+                    if let rectangleFeature = self.biggestRectangle(SobrCameraView.highAccuracyRectangleDetector?.features(in: enhancedImage) as! [CIRectangleFeature]) {
+//                        rectangleFeature
+                        enhancedImage = self.perspectiveCorrectedImage(enhancedImage, feature: rectangleFeature)
+                    }
+                }
+                
+                UIGraphicsBeginImageContext(CGSize(width: enhancedImage.extent.size.height, height: enhancedImage.extent.size.width))
+                
+                UIImage(ciImage: enhancedImage, scale: 1.0, orientation: UIImageOrientation.right).draw(in: CGRect(x: 0, y: 0, width: enhancedImage.extent.size.height, height: enhancedImage.extent.size.width))
+                
+                let image = UIGraphicsGetImageFromCurrentImageContext()
+                UIGraphicsEndImageContext()
+                
+                completion(image!, self.biggestRectangle(SobrCameraView.highAccuracyRectangleDetector?.features(in: enhancedImage) as! [CIRectangleFeature]))
             }
-            
-            UIGraphicsBeginImageContext(CGSize(width: enhancedImage.extent.size.height, height: enhancedImage.extent.size.width))
-            
-            UIImage(ciImage: enhancedImage, scale: 1.0, orientation: UIImageOrientation.right).draw(in: CGRect(x: 0, y: 0, width: enhancedImage.extent.size.height, height: enhancedImage.extent.size.width))
-            
-            let image = UIGraphicsGetImageFromCurrentImageContext()
-            UIGraphicsEndImageContext()
-            
-            completion(image!, self.biggestRectangle(SobrCameraView.highAccuracyRectangleDetector?.features(in: enhancedImage) as! [CIRectangleFeature]))
         })
         self.capturing = false
     }
@@ -309,11 +332,11 @@ open class SobrCameraView: UIView, AVCaptureVideoDataOutputSampleBufferDelegate 
     }
     
     fileprivate func contrastFilter(_ image: CIImage) -> CIImage {
-        return CIFilter(name: "CIColorControls", withInputParameters: ["inputContrast":1.1, kCIInputImageKey: image])!.outputImage!
+        return CIFilter(name: "CIColorControls", withInputParameters: ["inputBrightness":0.0, "inputContrast":1.14, "inputSaturation":0.0, kCIInputImageKey: image])!.outputImage!
     }
     
     fileprivate func enhanceFilter(_ image: CIImage) -> CIImage {
-        return CIFilter(name: "CIColorControls", withInputParameters: ["inputBrightness":0.0, "inputContrast":1.14, "inputSaturation":0.0, kCIInputImageKey: image])!.outputImage!
+        return CIFilter(name: "CIColorControls", withInputParameters: ["inputContrast":1.1, kCIInputImageKey: image])!.outputImage!
     }
     
     fileprivate func biggestRectangle(_ rectangles: [CIRectangleFeature]) -> CIRectangleFeature? {
